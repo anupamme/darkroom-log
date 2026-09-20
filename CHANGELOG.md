@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.5.116 (2026-09-19)
+
+### Security: patched dependency DoS advisories (express, body-parser, qs, multer)
+
+- **Why:** `npm audit` (surfaced in the container's boot log) reported 4 advisories. `body-parser` and `qs` are reachable before login (`express.json()`/`urlencoded()` run ahead of `requireAuth`), so those were the priority; `multer` only backs the auth-gated music upload route.
+- **Fix:** `npm update express body-parser qs multer` run inside the container (same Node 20/Alpine as runtime), all within existing semver ranges: express 4.22.1 → 4.22.3, body-parser 1.20.4 → 1.20.8, qs 6.14.2 → 6.16.0 (single deduped copy — Express pinned its own 6.14.x, so bumping `qs` alone wasn't enough), multer 2.1.1 → 2.4.0. `package.json` ranges unchanged; only `package-lock.json` and `node_modules` moved.
+- **Deliberately not fixed:** `sharp` 0.33.5 (libvips/libheif CVEs). The fix is a breaking bump to 0.35.x that touches the thumbnail/preview pipeline (4 call sites) and needs its own test pass; exposure is minimal since sharp only decodes photos from Jacob's own Immich behind login. Still shows as 1 high in `npm audit`.
+- Server-side only, no client asset bump. package.json 1.5.115 → 1.5.116.
+
 ## v1.5.115 (2026-09-19)
 
 ### Security: removed the hardcoded default login password
