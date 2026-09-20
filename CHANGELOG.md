@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.5.115 (2026-09-19)
+
+### Security: removed the hardcoded default login password
+
+- **Why:** an automated security scan (OrbisAI, finding V-001, opened as GitHub PR #2) flagged `server.js:107`: when neither `PASSWORD_HASH` nor `APP_PASSWORD` was set, the server silently fell back to the password `darkroom`. Anyone who ran the image without setting a password would have had a login that's public in the source. Confirmed real in the code; not exploitable on this deployment, since the container sets `APP_PASSWORD`.
+- **Fix:** `server.js` now throws at boot if both `PASSWORD_HASH` and `APP_PASSWORD` are unset (or empty) instead of defaulting. Behaviour is unchanged whenever either is set. README/DOCKERHUB/docker-compose already documented `APP_PASSWORD` as required.
+- Server-only change, needs a container restart to take effect; no client asset bump. package.json 1.5.114 → 1.5.115.
+
 ## v1.5.114 (2026-09-18)
 
 ### Fix: Analog tab's Sort button did nothing; Prints tab could get stuck on "Loading..." forever
