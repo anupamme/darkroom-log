@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.5.117 (2026-09-29)
+
+### Fix: "Add to Album" picker stopped surfacing the most-recently-used album; Immich tab now sorted too
+
+- **Why:** Jacob reported the "+ Album" picker no longer sorted by most-recently-edited (the v1.5.102 change). The sort itself was intact. The server bumps an album's `updatedAt` on every `PUT /api/albums/:id`, but `addToAlbum()` only updated the local `assets`/`cover` and never copied the new `updatedAt` back into `state.albums`. The picker order therefore stayed frozen at page-load order: filing a photo into an album didn't move it to the top until a full reload. v1.5.102 likely looked correct because it was checked after a reload.
+- `public/app.js`: new `syncAlbumUpdatedAt(albumId, res)` helper mirrors the server's returned `updatedAt` (falls back to now) onto `state.currentAlbum` and the matching `state.albums` entry. Called from `addToAlbum`, `removeFromAlbum`, `removeSelectedFromAlbum`, drag-reorder `dragDrop`, and slideshow-settings save. Those paths had the same gap, which also left the Albums tab's "Recently updated" sort stale mid-session. `renameAlbum` now carries `updated.updatedAt` through as well.
+- **Immich tab of the same modal:** `renderImmichAlbumPickList()` previously listed albums in whatever order Immich returned them. It now sorts by Immich's own `updatedAt` (newest first), which Immich bumps when assets are added. The list is fetched fresh on every open, so no local sync is needed.
+- Client-only change: `public/app.js` (`?v=290` → `?v=291` in `index.html`), `public/sw.js` (`SHELL_CACHE` `darkroom-v160` → `darkroom-v161`). package.json 1.5.116 → 1.5.117.
+
 ## v1.5.116 (2026-09-19)
 
 ### Security: patched dependency DoS advisories (express, body-parser, qs, multer)

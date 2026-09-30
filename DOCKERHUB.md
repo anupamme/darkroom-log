@@ -19,6 +19,15 @@ header, optional slideshow, and pinch-zoom on every photo. No login required for
 
 **Immich compatibility:** actively run in production against **Immich v3.2.0** (upgraded 2026-09-13, audited clean against this image). Talks to Immich entirely through its REST API (asset/search/album/tag endpoints), so it isn't tied to Immich's internal ML/vector-search backend — the v3 migration (pgvecto.rs → VectorChord) needed no changes on Darkroom's side. Not tested against Immich versions older than v3. Note: Immich v3.2.0 formally deprecated the "flat" search endpoints this app's Immich integration is built on, with removal planned for a future Immich v4 — no impact today, but a v4 upgrade will require a search-layer rewrite here.
 
+## What's new in v1.5.114–117
+
+Security hardening plus a handful of fixes.
+
+- **Breaking: `APP_PASSWORD` (or `PASSWORD_HASH`) is now required.** The server refuses to start if neither is set, instead of silently falling back to a built-in default password. If you already set one, nothing changes.
+- **Patched dependency DoS advisories** in express, body-parser, qs and multer.
+- **Fixed: the "+ Album" picker didn't move the album you'd just added to back to the top until a page reload.** It now updates immediately. Removing, reordering and renaming also keep the Albums tab's "Recently updated" sort current. The picker's Immich-albums tab is now sorted by most recently updated too.
+- **Fixed: the Analog tab's Sort button did nothing, and the Prints tab could get stuck on "Loading..."** when Analog was the default tab.
+
 ## What's new in v1.5.109–113
 
 Renamed the Library/Immich tabs to match what's actually in them, plus a mode-toggle and Prints sort cleanup.

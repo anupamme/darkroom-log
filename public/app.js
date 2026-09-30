@@ -1853,6 +1853,19 @@ function sortAlbums(albums, sort) {
   return arr;
 }
 
+// The server bumps an album's updatedAt on every PUT, but the client copy in
+// state.albums was never updated — so "recently updated" sorts (Albums grid,
+// "+ Album" picker) stayed frozen at page-load order until a reload. Mirror
+// the server's value (or "now" as a fallback) onto the local copies.
+async function syncAlbumUpdatedAt(albumId, res) {
+  if (res && !res.ok) return;
+  let updatedAt = new Date().toISOString();
+  try { const d = await res.json(); if (d && d.updatedAt) updatedAt = d.updatedAt; } catch (e) { /* keep fallback */ }
+  for (const a of [state.currentAlbum, ...(state.albums || [])]) {
+    if (a && a.id === albumId) a.updatedAt = updatedAt;
+  }
+}
+
 function renderAlbumsGrid() {
   const grid = document.getElementById('albums-grid');
   if (!state.albums.length) {
@@ -2043,9 +2056,10 @@ async function renameAlbum(albumId) {
   const updated = await r.json();
   album.title = updated.title;
   album.slug = updated.slug;
+  album.updatedAt = updated.updatedAt || album.updatedAt;
   if (state.albums) {
     state.albums = state.albums.map(a => a.id === albumId
-      ? { ...a, title: updated.title, slug: updated.slug } : a);
+      ? { ...a, title: updated.title, slug: updated.slug, updatedAt: album.updatedAt } : a);
   }
   if (state.currentAlbum && state.currentAlbum.id === albumId) {
     document.getElementById('header-title').textContent = updated.title;
@@ -2066,10 +2080,11 @@ async function deleteAlbum(albumId) {
 async function removeFromAlbum(assetId) {
   const album = state.currentAlbum;
   album.assets = album.assets.filter(a => a !== assetId);
-  await fetch('/api/albums/' + album.id, {
+  const res = await fetch('/api/albums/' + album.id, {
     method: 'PUT', headers: {'Content-Type':'application/json'},
     body: JSON.stringify({ assets: album.assets })
   });
+  await syncAlbumUpdatedAt(album.id, res);
   if (document.getElementById('recent-detail-view')?.classList.contains('active')) goBackFromDetail();
   renderAlbumDetail();
 }
@@ -2079,10 +2094,11 @@ async function removeSelectedFromAlbum() {
   const toRemove = state.albumSelected || new Set();
   if (!toRemove.size) return;
   album.assets = album.assets.filter(a => !toRemove.has(a));
-  await fetch('/api/albums/' + album.id, {
+  const res = await fetch('/api/albums/' + album.id, {
     method: 'PUT', headers: {'Content-Type':'application/json'},
     body: JSON.stringify({ assets: album.assets })
   });
+  await syncAlbumUpdatedAt(album.id, res);
   state.albumSelectMode = false;
   state.albumSelected = new Set();
   renderAlbumDetail();
@@ -2101,10 +2117,11 @@ async function dragDrop(e, targetIdx) {
   assets.splice(targetIdx, 0, moved);
   album.assets = assets;
   dragSrcIdx = null;
-  await fetch('/api/albums/' + album.id, {
+  const res = await fetch('/api/albums/' + album.id, {
     method: 'PUT', headers: {'Content-Type':'application/json'},
     body: JSON.stringify({ assets })
   });
+  await syncAlbumUpdatedAt(album.id, res);
   renderAlbumDetail();
 }
 
@@ -2178,7 +2195,10 @@ async function renderImmichAlbumPickList() {
       list.innerHTML = '<div style="color:var(--text-dim);font-family:IBM Plex Mono,monospace;font-size:11px">No Immich albums found</div>';
       return;
     }
-    list.innerHTML = albums.map(a => `
+    // Most-recently-updated first, matching the Darkroom tab. Fetched fresh on
+    // every open, and Immich bumps an album's updatedAt when assets are added.
+    const sorted = albums.slice().sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
+    list.innerHTML = sorted.map(a => `
       <button class="btn btn-ghost btn-sm" style="width:100%;text-align:left;margin-bottom:0.4rem" data-action="addToImmichAlbum" data-id="${a.id}">${a.albumName || 'Untitled'} (${a.assetCount || 0})</button>
     `).join('');
   } catch(e) {
@@ -2363,12 +2383,14 @@ async function addToAlbum(albumId) {
   const newAdds = toAdd.filter(id => !album.assets.includes(id));
   const newAssets = [...newAdds, ...album.assets];
   const cover = album.cover || newAssets[0];
-  await fetch('/api/albums/' + albumId, {
+  const res = await fetch('/api/albums/' + albumId, {
     method: 'PUT', headers: {'Content-Type':'application/json'},
     body: JSON.stringify({ assets: newAssets, cover })
   });
   album.assets = newAssets;
   album.cover = cover;
+  // Bump locally so this album jumps to the top of the "+ Album" picker next time.
+  await syncAlbumUpdatedAt(albumId, res);
   closeModal('add-to-album-modal');
   state.pendingAddAssetId = null;
   if (state.selectMode) exitSelectMode();
@@ -2635,11 +2657,12 @@ async function saveSlideshowSettingsAndStart() {
   album.slideshowSettings = settings;
   // Save to server
   try {
-    await fetch('/api/albums/' + album.id, {
+    const res = await fetch('/api/albums/' + album.id, {
       method: 'PUT',
       headers: {'Content-Type':'application/json'},
       body: JSON.stringify({ slideshowSettings: settings })
     });
+    await syncAlbumUpdatedAt(album.id, res);
   } catch(e) {}
   stopPacePulse();
   stopMusicPreview();
