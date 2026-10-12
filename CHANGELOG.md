@@ -9,6 +9,7 @@
 - **New optional env var:** `TRUSTED_PROXY_HOSTS` (comma-separated hostnames or IPs, default `cloudflared`). Not set on this deployment; no compose change needed.
 - **Behaviour change to know about:** clients arriving through an untrusted proxy now share one bucket, so all LAN logins via nginx-proxy-manager count together (10 per 15 minutes in total). Anyone running the image behind a different reverse proxy should set `TRUSTED_PROXY_HOSTS` to that proxy, or all their users share one bucket too. If `cloudflared` ever fails to resolve, internet logins share one bucket until it does: stricter, never looser.
 - Server-side only, no client asset bump. package.json 1.5.120 → 1.5.121.
+- Release housekeeping (2026-10-12): synced NAS v1.5.118 → v1.5.121 into the local repo (only the seven files changed on the NAS; the repo's newer `Dockerfile` left alone), committed `4766155` and pushed to GitHub `main`. `README.md` and `DOCKERHUB.md` config tables now document `TRUSTED_PROXY_HOSTS`; `DOCKERHUB.md` gained a "What's new in v1.5.118–121" section and its Immich compatibility line now reads v3.3.1 (upgraded 2026-10-12). Docker Hub overview refreshed from `DOCKERHUB.md` via the Hub API. The amd64 image was built and checked locally (sharp 0.35.5, compression 1.8.2, proxy-addr 2.0.8, `npm audit` clean) but **not yet pushed**: `jaap14/darkroom-log:1.5.121` + `:latest` are still to be published, so `:latest` on the Hub is v1.5.117 until then.
 
 ## v1.5.120 (2026-10-12)
 
