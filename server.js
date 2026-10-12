@@ -326,8 +326,51 @@ setInterval(() => {
   }
 }, 60 * 60 * 1000);
 
+// Who to count a login attempt against. Forwarding headers are only
+// believed when the TCP peer is a proxy we trust: by default the
+// `cloudflared` tunnel container, which is the only route in from the
+// internet and always carries Cloudflare's own cf-connecting-ip. Anything
+// else (LAN via nginx-proxy-manager, or straight to the published port) is
+// keyed by its socket address and its headers are ignored — previously a
+// client could send a different made-up cf-connecting-ip / x-forwarded-for
+// on every attempt and never hit the limit. TRUSTED_PROXY_HOSTS (comma-
+// separated hostnames or IPs) overrides the default. Names are re-resolved
+// at most once a minute so a recreated container's new IP is picked up. If
+// a name doesn't resolve, that proxy simply isn't trusted and everyone
+// behind it shares one bucket (stricter, never looser).
+const dns = require('dns');
+const TRUSTED_PROXY_HOSTS = (process.env.TRUSTED_PROXY_HOSTS || 'cloudflared')
+  .split(',').map(s => s.trim()).filter(Boolean);
+const stripV4Mapped = a => String(a || '').replace(/^::ffff:/i, '');
+let _trustedProxyIps = new Set();
+let _trustedProxyIpsAt = 0;
+async function trustedProxyIps() {
+  if (Date.now() - _trustedProxyIpsAt < 60 * 1000) return _trustedProxyIps;
+  const ips = new Set();
+  for (const host of TRUSTED_PROXY_HOSTS) {
+    try {
+      const addrs = await dns.promises.lookup(host, { all: true });
+      for (const a of addrs) ips.add(stripV4Mapped(a.address));
+    } catch (e) { /* not resolvable → not trusted */ }
+  }
+  _trustedProxyIps = ips;
+  _trustedProxyIpsAt = Date.now();
+  return ips;
+}
+async function loginClientKey(req) {
+  const peer = stripV4Mapped(req.socket.remoteAddress);
+  if ((await trustedProxyIps()).has(peer)) {
+    const xff = String(req.headers['x-forwarded-for'] || '').split(',').map(s => s.trim()).filter(Boolean);
+    // Rightmost x-forwarded-for entry is the one the trusted proxy itself
+    // appended; anything left of it came from the client.
+    const fwd = req.headers['cf-connecting-ip'] || xff[xff.length - 1];
+    if (fwd) return String(fwd);
+  }
+  return peer;
+}
+
 app.post('/api/login', async (req, res) => {
-  const ip = req.headers['cf-connecting-ip'] || req.headers['x-forwarded-for'] || req.ip;
+  const ip = await loginClientKey(req);
   if (!checkLoginRateLimit(ip)) {
     return res.status(429).json({ error: 'Too many login attempts. Try again in 15 minutes.' });
   }
@@ -1398,6 +1441,69 @@ app.post('/api/library-tags/:id/add', requireAuth, async (req, res) => {
     res.json({ ok: true, tag: normalized });
   } catch (e) {
     console.error(`library-tags: asset=${assetId} add="${normalized}" FAILED: ${e.message}`);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Batch add — links every tag in a pasted list with ONE Immich call (PUT
+// /tags/assets {tagIds, assetIds}) instead of one /add call per tag. Each
+// per-tag link makes Immich rewrite the asset's tag list and queue its own
+// SidecarWrite job; several in quick succession race (immich#32306: an
+// earlier job unlocks 'tags' while a newer change is still waiting, and
+// the follow-up metadata extraction then deletes the newer tag even though
+// its link call returned success). The bulk endpoint updates the asset's
+// tags once and queues a single SidecarWrite, so there is nothing to race.
+// Tag creation (POST /tags) doesn't touch any asset, so creating the
+// missing ones one by one first is safe. Immich answers {count} = newly
+// linked rows (already-linked tags are skipped, not errors), so there is
+// no per-tag result to check — a non-2xx fails the whole link step.
+app.post('/api/library-tags/:id/add-batch', requireAuth, async (req, res) => {
+  const assetId = req.params.id;
+  const raw = (req.body || {}).tags;
+  if (!Array.isArray(raw)) return res.status(400).json({ error: 'tags array required' });
+  const names = [...new Set(raw.filter(t => typeof t === 'string').map(t => t.trim().toLowerCase()).filter(Boolean))];
+  if (!names.length) return res.status(400).json({ error: 'tags array required' });
+  const failed = [];
+  const resolved = []; // [{ tag, id }]
+  try {
+    const all = await fetchImmichTags();
+    const byName = new Map(all.map(t => [(t.name || '').toLowerCase(), t.id]));
+    for (const name of names) {
+      let id = byName.get(name);
+      if (!id) {
+        const r = await fetch(`${IMMICH_URL}/tags`, {
+          method: 'POST',
+          headers: { 'x-api-key': IMMICH_KEY, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name })
+        });
+        const created = await r.json().catch(() => null);
+        if (!r.ok || !created || !created.id) {
+          console.error(`library-tags: asset=${assetId} batch create "${name}" FAILED (status=${r.status}): ${JSON.stringify(created)}`);
+          failed.push(name);
+          continue;
+        }
+        id = created.id;
+      }
+      resolved.push({ tag: name, id });
+    }
+    let added = [];
+    if (resolved.length) {
+      const linkRes = await fetch(`${IMMICH_URL}/tags/assets`, {
+        method: 'PUT',
+        headers: { 'x-api-key': IMMICH_KEY, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tagIds: resolved.map(x => x.id), assetIds: [assetId] })
+      });
+      const linkBody = await linkRes.json().catch(() => null);
+      if (!linkRes.ok) {
+        throw new Error(`bulk tag link failed (status=${linkRes.status}): ${JSON.stringify(linkBody)}`);
+      }
+      added = resolved.map(x => x.tag);
+      bustUploadSweepCache();
+      console.log(`library-tags: asset=${assetId} add-batch [${added.join(', ')}] newlyLinked=${linkBody && linkBody.count}`);
+    }
+    res.json({ ok: failed.length === 0, added, failed });
+  } catch (e) {
+    console.error(`library-tags: asset=${assetId} add-batch [${names.join(', ')}] FAILED: ${e.message}`);
     res.status(500).json({ error: e.message });
   }
 });

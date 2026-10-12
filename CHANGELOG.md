@@ -1,5 +1,46 @@
 # Changelog
 
+## v1.5.121 (2026-10-12)
+
+### Security: login rate limit could be dodged with a made-up forwarding header
+
+- **Why:** found while reviewing the v1.5.119 `proxy-addr` advisory. `/api/login` keyed its 10-attempts-per-15-minutes limit on `cf-connecting-ip || x-forwarded-for || req.ip`, taking the headers from whoever sent them. Through the Cloudflare tunnel that is fine (Cloudflare sets `cf-connecting-ip` itself), but on the LAN — via nginx-proxy-manager or straight to the published port — a client could send a different fake value on every attempt and never be limited. Confirmed live before the fix: 11 wrong passwords with rotating fake headers all returned 401, no 429.
+- **Fix (`server.js`):** new `loginClientKey(req)`. Forwarding headers are believed only when the TCP peer is a trusted proxy, by default the `cloudflared` container (resolved by name on the shared Docker network, re-resolved at most once a minute so a recreated container is picked up). For a trusted peer the key is `cf-connecting-ip`, else the rightmost `x-forwarded-for` entry. Every other peer is keyed by its socket address and its headers are ignored.
+- **New optional env var:** `TRUSTED_PROXY_HOSTS` (comma-separated hostnames or IPs, default `cloudflared`). Not set on this deployment; no compose change needed.
+- **Behaviour change to know about:** clients arriving through an untrusted proxy now share one bucket, so all LAN logins via nginx-proxy-manager count together (10 per 15 minutes in total). Anyone running the image behind a different reverse proxy should set `TRUSTED_PROXY_HOSTS` to that proxy, or all their users share one bucket too. If `cloudflared` ever fails to resolve, internet logins share one bucket until it does: stricter, never looser.
+- Server-side only, no client asset bump. package.json 1.5.120 → 1.5.121.
+
+## v1.5.120 (2026-10-12)
+
+### Security: sharp 0.33.5 → 0.35.5 (libvips, libheif, librsvg CVEs) — `npm audit` now clean
+
+- **Why:** the last open `npm audit` item, deferred in v1.5.116 and v1.5.119 because it is a breaking (0.x minor) bump touching the thumbnail/preview pipeline. Advisories: GHSA-f88m-g3jw-g9cj (libvips), GHSA-rgj7-g3m4-5g8c (libheif), GHSA-wq5f-xc86-pv6w (librsvg). Bundled libvips goes 8.15.3 → 8.18.7.
+- **Breaking changes checked against the four call sites** (`thumb-small`, share-size, public embed, public display): none apply. All use `failOn` (not the removed `failOnError`), object-form `sharpen({sigma, m1, m2})` (not the removed deprecated properties), JPEG in/out only (the AVIF tuning, `jp2k` rename and GIF loop changes don't touch them), and never read `paletteBitDepth`. Runtime requirements met: Node 20.20.2 (needs >= 20.9), Alpine 3.23 musl (needs >= 1.2.5). The removed `install` script doesn't matter; the prebuilt linuxmusl-x64 binary is used.
+- **Tested before deploying:** all four pipelines (7 size/sharpen variants, copied verbatim from `server.js`) run under both versions in a throwaway local `node:20-alpine` container on 4 real album originals (~6800 px). 25 of 28 outputs byte-identical; the other 3 (sharpened 1200/1280 px renders of one photo) differ by at most 6/255 on under 0.06% of samples. Dimensions, sRGB ICC, EXIF, IPTC and XMP identical in every output. No code changes needed.
+- **Fix:** `npm install --save sharp@^0.35.5` run inside the container. `package.json` range `^0.33.5` → `^0.35.5`; `package-lock.json` and `node_modules` moved. Existing `thumb-cache`/`share-cache` files left in place (new renders are equivalent).
+- Server-side only, no client asset bump. package.json 1.5.119 → 1.5.120.
+
+## v1.5.119 (2026-10-12)
+
+### Security: patched two new dependency advisories (compression, proxy-addr)
+
+- **Why:** the boot-log `npm audit` had gone from 1 high (after v1.5.116) to 3 (2 high, 1 critical) on newly published advisories.
+- **compression** 1.8.1 → 1.8.2 (GHSA-vc2v-76pw-4v95, high): memory leak when a client closes a compressed response early. This was the one with real exposure: `app.use(compression())` runs on every request ahead of `requireAuth`, and the site is public through the Cloudflare tunnel.
+- **proxy-addr** 2.0.7 → 2.0.8 (GHSA-jqcg-44mw-7w3h, critical; transitive via express): IP spoofing through an IPv4-mapped IPv6 trust subnet. Not reachable here, since `server.js` never sets `trust proxy`, but patched anyway as it was in range.
+- **Fix:** `npm update compression proxy-addr` run inside the container, both within existing semver ranges. `package.json` ranges unchanged; only `package-lock.json` and `node_modules` moved.
+- **Still open:** `sharp` 0.33.5 (libvips/libheif, and now librsvg, CVEs). Fix is the breaking bump to 0.35.5 already deferred in v1.5.116; `npm audit` shows it as the remaining 1 high.
+- Server-side only, no client asset bump. package.json 1.5.118 → 1.5.119.
+
+## v1.5.118 (2026-10-12)
+
+### Fix: pasting several tags onto a Library photo could silently lose one of them
+
+- **Why:** found while auditing Immich v3.3.1. Upstream bug immich#32306 (present in v3.2.4 and v3.3.1 alike): each per-tag link call makes Immich rewrite the asset's tag list and queue its own SidecarWrite job. When several land on the same asset in quick succession, an earlier job can unlock the `tags` property while a newer change is still waiting, and the metadata extraction that follows then deletes the newer tag, even though its link call returned success. `addLibraryTag()` looped over a pasted list calling `/api/library-tags/:id/add` once per tag, which is exactly that pattern. The "rodinal" drop fixed in v1.5.105 may have been this race rather than (or as well as) the unchecked link result; not provable after the fact.
+- `server.js`: new `POST /api/library-tags/:id/add-batch` `{tags:[...]}`. Fetches Immich's tag list once, creates any missing tags (creation doesn't touch an asset, so it can't race), then links them all with a single `PUT /tags/assets {tagIds, assetIds}`. Checked against Immich v3.3.1's `tag.service.ts`: `bulkTagAssets` updates the asset's tags once and emits one `AssetTag` event per asset, so one SidecarWrite. Responds `{ok, added, failed}`; `failed` holds tags that couldn't be created. Immich returns only `{count}` (newly linked rows; already-linked tags are skipped, not errors), so a non-2xx fails the whole link step.
+- `public/app.js`: `addLibraryTag()` sends the whole paste in one `add-batch` request instead of a loop. Optimistic row update and the combined failure alert are unchanged.
+- **Not covered:** `/api/library-tags/:id/add` is unchanged and still used by the suggested-tag chips (one tag per click), so clicking several suggestions within a second or two can still hit the race. Removals are single calls too.
+- `public/app.js` (`?v=291` → `?v=292` in `index.html`), `public/sw.js` (`SHELL_CACHE` `darkroom-v161` → `darkroom-v162`). Needs a container restart for `server.js`. package.json 1.5.117 → 1.5.118.
+
 ## v1.5.117 (2026-09-29)
 
 ### Fix: "Add to Album" picker stopped surfacing the most-recently-used album; Immich tab now sorted too

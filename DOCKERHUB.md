@@ -17,7 +17,16 @@ header, optional slideshow, and pinch-zoom on every photo. No login required for
 
 **Source:** https://github.com/jaapjan14/darkroom-log
 
-**Immich compatibility:** actively run in production against **Immich v3.2.0** (upgraded 2026-09-13, audited clean against this image). Talks to Immich entirely through its REST API (asset/search/album/tag endpoints), so it isn't tied to Immich's internal ML/vector-search backend — the v3 migration (pgvecto.rs → VectorChord) needed no changes on Darkroom's side. Not tested against Immich versions older than v3. Note: Immich v3.2.0 formally deprecated the "flat" search endpoints this app's Immich integration is built on, with removal planned for a future Immich v4 — no impact today, but a v4 upgrade will require a search-layer rewrite here.
+**Immich compatibility:** actively run in production against **Immich v3.3.1** (upgraded 2026-10-12, audited clean against this image). Talks to Immich entirely through its REST API (asset/search/album/tag endpoints), so it isn't tied to Immich's internal ML/vector-search backend — the v3 migration (pgvecto.rs → VectorChord) needed no changes on Darkroom's side. Not tested against Immich versions older than v3. Note: Immich v3.2.0 formally deprecated the "flat" search endpoints this app's Immich integration is built on, with removal planned for a future Immich v4 — no impact today, but a v4 upgrade will require a search-layer rewrite here.
+
+## What's new in v1.5.118–121
+
+A tag-loss fix and a security pass. `npm audit` is now clean.
+
+- **Fixed: pasting several tags onto a Library photo could silently lose one of them.** Linking tags one call at a time triggers a race in Immich's sidecar writes (upstream immich#32306, present in v3.2 and v3.3) that can delete a tag after its link call reported success. A pasted list is now linked in a single Immich call. The one-click suggested-tag chips still add one tag at a time.
+- **sharp 0.33.5 → 0.35.5**, picking up libvips, libheif and librsvg security fixes. Rendered output was compared before and after on real photos: byte-identical in 25 of 28 renders, the rest not visibly different.
+- **Patched advisories in `compression`** (memory leak when a client drops a compressed response early) **and `proxy-addr`.**
+- **Login rate limit hardened.** Forwarding headers are now believed only from a trusted proxy (the `cloudflared` container by default; override with the new optional `TRUSTED_PROXY_HOSTS`). Previously a client reaching the app without going through Cloudflare could send a made-up header on each attempt and never be limited. **If you run behind a different reverse proxy, set `TRUSTED_PROXY_HOSTS` to it**, otherwise all clients share one login-attempt bucket (10 per 15 minutes).
 
 ## What's new in v1.5.114–117
 
@@ -157,6 +166,7 @@ Then open `http://localhost:3000` and sign in with `APP_PASSWORD`.
 | `BRAND_URL` | no | Public album header link destination |
 | `BRAND_SITE_LABEL` | no | Text shown next to the brand name (e.g. `yourdomain.com ↗`) |
 | `CSP_FRAME_ANCESTORS` | no | Space-separated origins allowed to embed `/album/:slug` |
+| `TRUSTED_PROXY_HOSTS` | no | Comma-separated hostnames or IPs of reverse proxies whose forwarding headers (`cf-connecting-ip`, `x-forwarded-for`) are believed for login rate limiting. Default `cloudflared`. If you run behind another proxy (nginx, Traefik, Caddy), set this to it, or all clients share one login-attempt bucket. |
 
 ## Volumes
 

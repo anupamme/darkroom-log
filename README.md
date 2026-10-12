@@ -138,6 +138,7 @@ docker compose up -d
 | `BRAND_URL` | no | Public album header link destination (e.g. `https://yourdomain.com`) |
 | `BRAND_SITE_LABEL` | no | Text shown next to the brand name (e.g. `yourdomain.com ↗`) |
 | `CSP_FRAME_ANCESTORS` | no | Space-separated origins allowed to embed `/album/:slug` beyond `'self'`. Example: `https://*.squarespace.com https://*.substack.com` |
+| `TRUSTED_PROXY_HOSTS` | no | Comma-separated hostnames or IPs of reverse proxies whose forwarding headers (`cf-connecting-ip`, `x-forwarded-for`) are believed for login rate limiting. Default `cloudflared`. If you run behind another proxy (nginx, Traefik, Caddy), set this to it, or all clients share one login-attempt bucket. |
 
 ## Volumes
 

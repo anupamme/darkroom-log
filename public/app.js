@@ -4160,25 +4160,34 @@ async function addLibraryTag() {
   if (!newTags.length) return;
   inp.value = '';
   inp.classList.remove('visible');
-  // Continue through the whole batch and report failures together at the
-  // end, instead of aborting (and silently dropping everything after) on
-  // the first failed tag — a pasted list can have one bad tag among many
-  // good ones, and the earlier abort-on-first-error behavior meant a
-  // single failure silently discarded every tag after it in the paste.
-  const failed = [];
-  const added = [];
-  for (const t of newTags) {
-    const res = await fetch(`/api/library-tags/${assetId}/add`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tag: t })
+  // Failures are reported together at the end: a pasted list can have one
+  // bad tag among many good ones, and the good ones should still land.
+  // One request for the whole paste (v1.5.118): the server links every tag
+  // in a single Immich call. One /add call per tag made Immich queue a
+  // sidecar write per tag, and those raced each other and could silently
+  // drop a tag that had reported success (immich#32306).
+  let failed = [];
+  let added = [];
+  try {
+    const res = await fetch(`/api/library-tags/${assetId}/add-batch`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tags: newTags })
     });
-    if (!res.ok) failed.push(t); else added.push(t);
+    const data = await res.json().catch(() => null);
+    if (res.ok && data) {
+      added = data.added || [];
+      failed = data.failed || [];
+    } else {
+      failed = newTags;
+    }
+  } catch (e) {
+    failed = newTags;
   }
   // Update the row from what we know we just wrote instead of re-fetching
   // Immich — its read-after-write for a just-linked tag can lag a beat
   // behind the write, which made successful adds look dropped until a
-  // manual reload. Each successful POST here is already confirmed by the
-  // server (v1.5.106+ checks Immich's real per-item link result), so the
-  // client doesn't need to re-verify by reading it back immediately.
+  // manual reload. The server only lists a tag under "added" once Immich
+  // has accepted the link call, so the client doesn't need to re-verify by
+  // reading it back immediately.
   if (added.length) {
     const merged = [...new Set([...currentDisplayedLibraryTags(), ...added])];
     const row = document.getElementById('library-tags-row');
